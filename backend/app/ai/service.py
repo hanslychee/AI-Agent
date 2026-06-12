@@ -268,6 +268,108 @@ def generate_questions(job_extracted: dict, parsed_cv: dict, analysis: dict | No
 
 
 # ---------------------------------------------------------------------------
+# 4b. AI-conducted live interview
+# ---------------------------------------------------------------------------
+MAX_INTERVIEWER_TURNS = 14   # ask the model to wrap up after this many messages
+HARD_TURN_LIMIT = 18         # force-close without the model beyond this
+MAX_CANDIDATE_MESSAGE_CHARS = 4000
+
+INTERVIEW_TURN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"},
+        "is_complete": {"type": "boolean"},
+    },
+    "required": ["message", "is_complete"],
+    "additionalProperties": False,
+}
+
+_INTERVIEWER_SYSTEM = prompts.FAIRNESS_CHARTER + "\n\n" + prompts.INTERVIEWER_ROLE
+
+
+def conduct_interview_turn(
+    candidate_name: str,
+    job_extracted: dict,
+    parsed_cv: dict,
+    questions: dict | None,
+    transcript: list[dict],
+    force_wrap_up: bool = False,
+) -> dict:
+    """Return the interviewer's next turn: {"message": str, "is_complete": bool}."""
+    context = prompts.INTERVIEW_CONTEXT_PROMPT.format(
+        job_json=json.dumps(job_extracted, indent=2),
+        cv_json=json.dumps(parsed_cv, indent=2),
+        questions_json=json.dumps(questions, indent=2) if questions else "(none prepared — derive questions from the job and CV)",
+        candidate_name=candidate_name,
+    )
+    messages = [{"role": "user", "content": context}]
+    for entry in transcript:
+        role = "assistant" if entry.get("role") == "interviewer" else "user"
+        messages.append({"role": role, "content": entry.get("text", "")})
+    if force_wrap_up:
+        messages.append({"role": "user", "content": prompts.WRAP_UP_INSTRUCTION})
+
+    response = _create_message(
+        max_tokens=1024,
+        system=_INTERVIEWER_SYSTEM,
+        messages=messages,
+        output_config={"format": {"type": "json_schema", "schema": INTERVIEW_TURN_SCHEMA}},
+    )
+    if response.stop_reason == "refusal":
+        raise AIServiceError("The AI declined to process this request.")
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        raise AIServiceError("AI returned malformed output. Please retry.")
+
+
+# ---------------------------------------------------------------------------
+# 4c. Assessment of an AI-conducted interview
+# ---------------------------------------------------------------------------
+
+
+def _build_assessment_schema() -> dict:
+    rating = {"type": "integer", "enum": [1, 2, 3, 4, 5]}
+    return {
+        "type": "object",
+        "properties": {
+            "ratings": {
+                "type": "object",
+                "properties": {cat: rating for cat in EVALUATION_CATEGORIES},
+                "required": list(EVALUATION_CATEGORIES),
+                "additionalProperties": False,
+            },
+            "strengths": _string_array(),
+            "concerns": _string_array(),
+            "summary": {"type": "string"},
+            "notes": {"type": "string"},
+        },
+        "required": ["ratings", "strengths", "concerns", "summary", "notes"],
+        "additionalProperties": False,
+    }
+
+
+def transcript_to_text(transcript: list[dict]) -> str:
+    label = {"interviewer": "Interviewer", "candidate": "Candidate"}
+    return "\n".join(
+        f"{label.get(e.get('role'), 'Unknown')}: {e.get('text', '')}" for e in transcript
+    )
+
+
+def assess_interview(candidate_name: str, job_title: str, job_extracted: dict, transcript: list[dict]) -> dict:
+    prompt = prompts.INTERVIEW_ASSESSMENT_PROMPT.format(
+        candidate_name=candidate_name,
+        job_title=job_title,
+        job_json=json.dumps(job_extracted, indent=2),
+        transcript_text=transcript_to_text(transcript)[:MAX_INPUT_CHARS],
+    )
+    result = _json_request(prompt, _build_assessment_schema(), max_tokens=4000)
+    result["human_review_reminder"] = prompts.HUMAN_REVIEW_REMINDER
+    return result
+
+
+# ---------------------------------------------------------------------------
 # 5. Interview evaluation
 # ---------------------------------------------------------------------------
 EVALUATION_CATEGORIES = [

@@ -20,7 +20,8 @@ replacement for human decision-making**.
 | **CV Matching & Scoring** | Scores each CV against the job out of 100 (required skills 30, experience 25, education 15, achievements 15, soft skills 10, role fit 5) with strengths, missing skills, risk factors and a Strong/Good/Average/Weak Match recommendation. Category caps and the total are enforced server-side. |
 | **Candidate Summary** | HR-friendly summary: overview, best matching experience, top 5 strengths, possible concerns, suggested next step. |
 | **Interview Question Generator** | Technical, behavioral, experience-based, culture-fit and practical-case questions — each with a suggested follow-up — targeted at the candidate's missing skills. |
-| **Interview Evaluation** | 1–5 scorecard across 8 categories; the system computes a 0–100 interview score and writes a short AI evaluation. |
+| **AI-Conducted Interview** | HR generates a private tokenized link; the candidate opens it (no login) and is interviewed by the AI in a chat — one question at a time, adaptive follow-ups, 8–12 questions. On completion the AI produces a suggested scorecard + transcript for human review. |
+| **Interview Evaluation** | 1–5 scorecard across 8 categories; the system computes a 0–100 interview score and writes a short AI evaluation. AI-conducted interviews pre-fill this scorecard (marked "pending human review") so HR can adjust and confirm. |
 | **Final Candidate Report** | Combines CV screening + interview into an executive summary, strengths/weaknesses/concerns and a hiring recommendation (Highly Recommended → Not Recommended), with HR-owned salary-range and notes fields. Exportable as PDF. |
 | **Ranking Dashboard** | All candidates ranked by final score (60% CV + 40% interview) with status management (New → Hired). |
 
@@ -98,6 +99,12 @@ frontend/
 | POST | `/api/candidates/{id}/analyze` | Score CV vs job + summary |
 | POST | `/api/candidates/{id}/questions` | Generate interview questions |
 | POST | `/api/candidates/{id}/evaluation` | Submit 1–5 scorecard → score + AI summary |
+| POST | `/api/candidates/{id}/interview-link` | Generate/regenerate the AI interview link |
+| GET | `/api/candidates/{id}/interview-session` | Session status, transcript, AI assessment |
+| POST | `/api/candidates/{id}/interview-session/assess` | (Re)run the AI assessment of a completed interview |
+| GET | `/api/interview/{token}` | **Public** — candidate-facing session info |
+| POST | `/api/interview/{token}/start` | **Public** — AI greets and asks the first question |
+| POST | `/api/interview/{token}/message` | **Public** — candidate answer → next AI question |
 | POST / PATCH | `/api/candidates/{id}/report` | Generate report / update HR fields |
 | GET | `/api/candidates/{id}/report/pdf` | Export the final report as PDF |
 | GET | `/api/dashboard` | Pipeline stats |
@@ -138,10 +145,14 @@ server proxies `/api/*` to the backend on port 8000.
 1. **Job Descriptions** → paste a job description.
 2. **Upload CVs** → upload candidate CVs for that job.
 3. **Candidate Analysis** → run AI screening on each candidate.
-4. **Interview Questions** → generate a tailored question set.
-5. **Interview Evaluation** → fill in the 1–5 scorecard after the interview.
-6. **Final Reports** → generate the report, add salary range and HR notes, export PDF.
-7. **Candidate Ranking** → compare candidates and update statuses.
+4. **Interview Questions** → generate a tailored question set (used by the AI interviewer too).
+5. **Interview** → either interview the candidate yourself, or open the candidate's page,
+   click **Generate interview link** and send the link to the candidate — the AI conducts
+   the interview in a chat at `/interview/<token>` and suggests a scorecard afterwards.
+6. **Interview Evaluation** → review/adjust the 1–5 scorecard (pre-filled after an
+   AI-conducted interview) and confirm.
+7. **Final Reports** → generate the report, add salary range and HR notes, export PDF.
+8. **Candidate Ranking** → compare candidates and update statuses.
 
 ---
 

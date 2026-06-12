@@ -12,8 +12,9 @@ import InterviewQuestions from "./pages/InterviewQuestions.jsx";
 import InterviewEvaluation from "./pages/InterviewEvaluation.jsx";
 import Reports from "./pages/Reports.jsx";
 import Ranking from "./pages/Ranking.jsx";
+import PublicInterview from "./pages/PublicInterview.jsx";
 
-export default function App() {
+function AdminApp() {
   const [authed, setAuthed] = useState(Boolean(getToken()));
 
   useEffect(() => {
@@ -46,5 +47,15 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      {/* Candidate-facing AI interview — public, no login required */}
+      <Route path="/interview/:token" element={<PublicInterview />} />
+      <Route path="*" element={<AdminApp />} />
+    </Routes>
   );
 }

@@ -73,6 +73,9 @@ class Candidate(Base):
     final_report: Mapped["FinalReport"] = relationship(
         back_populates="candidate", uselist=False, cascade="all, delete-orphan"
     )
+    interview_session: Mapped["InterviewSession"] = relationship(
+        back_populates="candidate", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class Analysis(Base):
@@ -120,6 +123,29 @@ class InterviewEvaluation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     candidate: Mapped["Candidate"] = relationship(back_populates="evaluation")
+
+
+class InterviewSession(Base):
+    """AI-conducted interview reachable by the candidate through a tokenized link.
+
+    The transcript is a list of {"role": "interviewer"|"candidate", "text": str}
+    entries. When the interview completes, the AI produces a suggested scorecard
+    (ai_assessment) that pre-fills the InterviewEvaluation for human review.
+    """
+
+    __tablename__ = "interview_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"), unique=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/in_progress/completed
+    transcript: Mapped[list] = mapped_column(JSON, default=list)
+    ai_assessment: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    candidate: Mapped["Candidate"] = relationship(back_populates="interview_session")
 
 
 class FinalReport(Base):

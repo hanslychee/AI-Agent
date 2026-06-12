@@ -3,6 +3,119 @@ import { Link, useParams } from "react-router-dom";
 import { api, downloadReportPdf, STATUSES } from "../api.js";
 import { MatchBadge, Score, StatusBadge } from "../components/Badges.jsx";
 
+function AiInterviewCard({ candidate, run, busy }) {
+  const [copied, setCopied] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
+  const session = candidate.interview_session;
+  const link = session ? `${window.location.origin}/interview/${session.token}` : null;
+  const assessment = session?.ai_assessment;
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const statusLabel = {
+    pending: "Link created — waiting for the candidate",
+    in_progress: "Interview in progress",
+    completed: "Interview completed",
+  };
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 style={{ margin: 0 }}>AI-conducted interview</h2>
+        <button
+          className="btn small"
+          disabled={!!busy}
+          onClick={() => {
+            if (session && !confirm("Regenerating invalidates the current link and resets the interview. Continue?")) return;
+            run("link", () => api.createInterviewLink(candidate.id).then(() => api.getCandidate(candidate.id)));
+          }}
+        >
+          {busy === "link" ? "Generating…" : session ? "Regenerate link" : "Generate interview link"}
+        </button>
+      </div>
+      <p className="muted" style={{ marginTop: 6 }}>
+        The assistant interviews the candidate through a private link (no login needed) and
+        suggests a scorecard for your review. It never makes the hiring decision.
+      </p>
+
+      {session && (
+        <>
+          <span className={`badge ${session.status === "completed" ? "green" : "amber"}`}>
+            {statusLabel[session.status] || session.status}
+          </span>
+          {session.status !== "completed" && (
+            <div className="link-box">
+              <code>{link}</code>
+              <button className="btn secondary small" onClick={copy}>
+                {copied ? "Copied ✓" : "Copy link"}
+              </button>
+            </div>
+          )}
+          {session.expires_at && session.status !== "completed" && (
+            <p className="muted">Link valid until {new Date(session.expires_at).toLocaleDateString()}.</p>
+          )}
+
+          {session.transcript?.length > 0 && (
+            <>
+              <button className="btn secondary small" onClick={() => setShowTranscript(!showTranscript)}>
+                {showTranscript ? "Hide transcript" : `View transcript (${session.transcript.length} messages)`}
+              </button>
+              {showTranscript && (
+                <div className="transcript-view">
+                  {session.transcript.map((m, i) => (
+                    <div className="line" key={i}>
+                      <div className="who">{m.role === "interviewer" ? "AI Interviewer" : candidate.name}</div>
+                      <div>{m.text}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {session.status === "completed" && (
+            assessment ? (
+              <>
+                <h3>AI-suggested scorecard (pending human review)</h3>
+                <p style={{ whiteSpace: "pre-wrap" }}>{assessment.summary}</p>
+                <div className="grid-2">
+                  <div>
+                    <strong>Strengths observed</strong>
+                    <ul className="clean">{(assessment.strengths || []).map((s) => <li key={s}>{s}</li>)}</ul>
+                  </div>
+                  <div>
+                    <strong>Concerns to verify</strong>
+                    <ul className="clean">{(assessment.concerns || []).map((s) => <li key={s}>{s}</li>)}</ul>
+                  </div>
+                </div>
+                <p className="muted">
+                  The suggested ratings pre-fill the <Link to={`/evaluation?candidate=${candidate.id}`}>Interview
+                  Evaluation</Link> scorecard — review and adjust them there.
+                </p>
+              </>
+            ) : (
+              <div style={{ marginTop: 10 }}>
+                <p className="muted">The assessment hasn't been generated yet.</p>
+                <button
+                  className="btn small"
+                  disabled={!!busy}
+                  onClick={() => run("assess", () => api.rerunAssessment(candidate.id))}
+                >
+                  {busy === "assess" ? "Assessing…" : "Generate AI assessment"}
+                </button>
+              </div>
+            )
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 const SCORE_LABELS = {
   required_skills_match: "Required skills match (30)",
   relevant_experience: "Relevant experience (25)",
@@ -64,6 +177,8 @@ export default function CandidateDetail() {
       </div>
 
       {error && <div className="error-box">{error}</div>}
+
+      <AiInterviewCard candidate={c} run={run} busy={busy} />
 
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between" }}>

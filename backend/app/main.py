@@ -13,6 +13,7 @@ from .routers import (
     auth_router,
     candidates_router,
     dashboard_router,
+    interview_router,
     jobs_router,
 )
 
@@ -40,6 +41,8 @@ app.include_router(jobs_router.router)
 app.include_router(candidates_router.router)
 app.include_router(analysis_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(interview_router.hr_router)
+app.include_router(interview_router.public_router)
 
 
 @app.on_event("startup")

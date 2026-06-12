@@ -79,6 +79,18 @@ export const api = {
       body: { ratings, interviewer_notes },
     }),
   generateReport: (id) => request(`/api/candidates/${id}/report`, { method: "POST" }),
+
+  createInterviewLink: (id) =>
+    request(`/api/candidates/${id}/interview-link`, { method: "POST" }),
+  rerunAssessment: (id) =>
+    request(`/api/candidates/${id}/interview-session/assess`, { method: "POST" }),
+
+  // Public (candidate-facing, token-based — no login required)
+  getPublicInterview: (token) => request(`/api/interview/${token}`),
+  startPublicInterview: (token) => request(`/api/interview/${token}/start`, { method: "POST" }),
+  sendPublicInterviewMessage: (token, text) =>
+    request(`/api/interview/${token}/message`, { method: "POST", body: { text } }),
+
   updateReport: (id, fields) =>
     request(`/api/candidates/${id}/report`, { method: "PATCH", body: fields }),
 };

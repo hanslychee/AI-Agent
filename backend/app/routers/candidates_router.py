@@ -50,6 +50,14 @@ def candidate_detail_dict(c: Candidate) -> dict:
             "hr_notes": c.final_report.hr_notes,
         } if c.final_report else None,
         "job_extracted": c.job.extracted if c.job else {},
+        "interview_session": {
+            "token": c.interview_session.token,
+            "status": c.interview_session.status,
+            "transcript": c.interview_session.transcript or [],
+            "expires_at": c.interview_session.expires_at.isoformat() if c.interview_session.expires_at else None,
+            "completed_at": c.interview_session.completed_at.isoformat() if c.interview_session.completed_at else None,
+            "ai_assessment": c.interview_session.ai_assessment or None,
+        } if c.interview_session else None,
     })
     return data
 
