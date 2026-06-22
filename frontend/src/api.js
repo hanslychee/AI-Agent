@@ -23,7 +23,9 @@ async function request(path, { method = "GET", body, formData } = {}) {
     body: formData ? formData : body ? JSON.stringify(body) : undefined,
   });
 
-  if (res.status === 401) {
+  // Only treat 401 as session expiry on authenticated endpoints — not login.
+  const isLogin = path.endsWith("/login");
+  if (res.status === 401 && !isLogin) {
     setToken(null);
     window.dispatchEvent(new Event("recruitai:logout"));
     throw new Error("Session expired. Please sign in again.");
@@ -42,9 +44,6 @@ async function request(path, { method = "GET", body, formData } = {}) {
 }
 
 export const api = {
-  login: (username, password) =>
-    request("/api/auth/login", { method: "POST", body: { username, password } }),
-
   dashboard: () => request("/api/dashboard"),
   ranking: (jobId) => request(`/api/ranking${jobId ? `?job_id=${jobId}` : ""}`),
 
@@ -93,6 +92,20 @@ export const api = {
 
   updateReport: (id, fields) =>
     request(`/api/candidates/${id}/report`, { method: "PATCH", body: fields }),
+
+  resolveUsername: (username) => request("/api/auth/resolve", { method: "POST", body: { username } }),
+
+  // Recruiter Tasks
+  listRecruiterTasks: (status) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    const qs = params.toString();
+    return request(`/api/recruiter-tasks${qs ? `?${qs}` : ""}`);
+  },
+  getRecruiterTask: (id) => request(`/api/recruiter-tasks/${id}`),
+  createRecruiterTask: (data) => request("/api/recruiter-tasks", { method: "POST", body: data }),
+  updateRecruiterTask: (id, data) => request(`/api/recruiter-tasks/${id}`, { method: "PATCH", body: data }),
+  deleteRecruiterTask: (id) => request(`/api/recruiter-tasks/${id}`, { method: "DELETE" }),
 };
 
 export async function downloadReportPdf(candidateId, candidateName) {

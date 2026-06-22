@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { api } from "../api.js";
-import { Score, StatusBadge } from "../components/Badges.jsx";
+import StatCards from "../components/dashboard/StatCards.jsx";
+import OpenPositionChart from "../components/dashboard/OpenPositionChart.jsx";
+import OverviewChart from "../components/dashboard/OverviewChart.jsx";
+import DailyTaskTable from "../components/dashboard/DailyTaskTable.jsx";
+import SchedulePanel from "../components/dashboard/SchedulePanel.jsx";
+import ActivityFeed from "../components/dashboard/ActivityFeed.jsx";
+import TeamPerformance from "../components/dashboard/TeamPerformance.jsx";
+import QuickActions from "../components/dashboard/QuickActions.jsx";
+import LoadingSkeleton from "../components/ui/LoadingSkeleton.jsx";
+import showToast from "../components/ui/Toast.jsx";
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
@@ -11,80 +19,46 @@ export default function Dashboard() {
     api.dashboard().then(setData).catch((e) => setError(e.message));
   }, []);
 
-  if (error) return <div className="error-box">{error}</div>;
-  if (!data) return <p className="muted">Loading…</p>;
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      showToast.info("New application received from Sarah Chen!", {
+        duration: 5000,
+      });
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, []);
 
-  const stats = [
-    { label: "Open Jobs", value: data.jobs },
-    { label: "Candidates", value: data.candidates },
-    { label: "CVs Analyzed", value: data.analyzed },
-    { label: "Interviewed", value: data.interviewed },
-    { label: "Final Reports", value: data.reports },
-    { label: "Avg CV Score", value: data.average_cv_score ?? "—" },
-  ];
+  if (error) {
+    return (
+      <div className="px-4 py-3 rounded-lg bg-rose-50 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800 text-sm text-rose-700 dark:text-rose-300">
+        {error}
+      </div>
+    );
+  }
 
   return (
-    <>
-      <div className="page-header">
-        <h1>Dashboard</h1>
-        <p>Recruitment pipeline at a glance.</p>
-      </div>
+    <div className="flex gap-6 h-[calc(100vh-80px)]">
+      <div className="flex-1 min-w-0 overflow-y-auto pr-2 space-y-6 scrollbar-thin">
+        <StatCards />
 
-      <div className="stat-grid">
-        {stats.map((s) => (
-          <div className="stat" key={s.label}>
-            <div className="value">{s.value}</div>
-            <div className="label">{s.label}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid-2">
-        <div className="card">
-          <h2>Pipeline by status</h2>
-          <table>
-            <tbody>
-              {Object.entries(data.by_status).map(([status, count]) => (
-                <tr key={status}>
-                  <td><StatusBadge status={status} /></td>
-                  <td style={{ textAlign: "right", fontWeight: 600 }}>{count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <OpenPositionChart />
+          <OverviewChart />
         </div>
 
-        <div className="card">
-          <h2>Recent candidates</h2>
-          {data.recent_candidates.length === 0 ? (
-            <div className="empty">
-              No candidates yet. <Link to="/jobs">Add a job</Link> then{" "}
-              <Link to="/upload">upload CVs</Link>.
-            </div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Job</th>
-                  <th>CV Score</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recent_candidates.map((c) => (
-                  <tr key={c.id}>
-                    <td><Link to={`/candidates/${c.id}`}>{c.name}</Link></td>
-                    <td className="muted">{c.job_title}</td>
-                    <td><Score value={c.cv_score} /></td>
-                    <td><StatusBadge status={c.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <DailyTaskTable />
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <ActivityFeed />
+          <TeamPerformance />
         </div>
       </div>
-    </>
+
+      <div className="hidden xl:block w-80 flex-shrink-0 overflow-y-auto pl-2 scrollbar-thin">
+        <SchedulePanel />
+      </div>
+
+      <QuickActions />
+    </div>
   );
 }

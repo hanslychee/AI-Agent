@@ -12,3 +12,6 @@ frontend/dist/
 
 # Misc
 .DS_Store
+
+# Firebase service account (contains secrets)
+backend/firebase-service-account.json

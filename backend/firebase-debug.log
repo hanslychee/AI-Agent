@@ -1,0 +1,14 @@
+[debug] [2026-06-18T11:59:46.461Z] ----------------------------------------------------------------------
+[debug] [2026-06-18T11:59:46.467Z] Command:       /Users/caasidev/.nvm/versions/node/v20.19.6/bin/node /Users/caasidev/.nvm/versions/node/v20.19.6/bin/firebase deploy --project g-house-d458c --only firestore:indexes
+[debug] [2026-06-18T11:59:46.467Z] CLI Version:   15.18.0
+[debug] [2026-06-18T11:59:46.467Z] Platform:      darwin
+[debug] [2026-06-18T11:59:46.467Z] Node Version:  v20.19.6
+[debug] [2026-06-18T11:59:46.467Z] Time:          Thu Jun 18 2026 12:59:46 GMT+0100 (West Africa Standard Time)
+[debug] [2026-06-18T11:59:46.467Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-06-18T11:59:52.333Z] Error: Timed out.
+    at Timeout._onTimeout (/Users/caasidev/.nvm/versions/node/v20.19.6/lib/node_modules/firebase-tools/lib/utils.js:309:49)
+    at listOnTimeout (node:internal/timers:581:17)
+    at process.processTimers (node:internal/timers:519:7)
+[error] 
+[error] Error: An unexpected error has occurred.

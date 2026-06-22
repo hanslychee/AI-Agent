@@ -4,17 +4,91 @@ Each function sends one structured request to the Claude API and returns a
 validated Python dict. JSON output is enforced with structured outputs
 (output_config.format), so responses always parse.
 """
+import hashlib
 import json
+import re
+import time
 
 import anthropic
 
-from ..config import get_settings
+from app.core.config import get_settings
 from . import prompts
 
 settings = get_settings()
 _client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
 
 MAX_INPUT_CHARS = 60_000  # generous cap for a single CV / job description
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0
+
+# ---------------------------------------------------------------------------
+# Tiered model selection
+# ---------------------------------------------------------------------------
+_MODEL_FAST_DEFAULT = "claude-sonnet-4-20250514"
+_MODEL_QUALITY_DEFAULT = "claude-opus-4-8"
+
+
+def get_model(tier: str = "quality") -> str:
+    """Return the model name for the requested tier: 'fast' or 'quality'."""
+    s = get_settings()
+    if tier == "fast":
+        return s.ai_model_fast or _MODEL_FAST_DEFAULT
+    return s.ai_model_quality or _MODEL_QUALITY_DEFAULT
+
+
+# ---------------------------------------------------------------------------
+# In-memory AI response cache
+# ---------------------------------------------------------------------------
+_cache: dict[str, tuple[float, str]] = {}  # key -> (expiry_ts, json_str)
+
+
+def _cache_key(*, prompt: str, schema_str: str, model: str, tier: str) -> str:
+    raw = f"{prompt}|{schema_str}|{model}|{tier}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cached_json_request(
+    prompt: str,
+    schema: dict,
+    max_tokens: int = 4096,
+    tier: str = "quality",
+) -> dict:
+    key = _cache_key(prompt=prompt, schema_str=json.dumps(schema, sort_keys=True),
+                     model=get_model(tier), tier=tier)
+    now = time.time()
+    ttl = get_settings().ai_cache_ttl_seconds
+
+    if ttl > 0 and key in _cache:
+        expiry, cached = _cache[key]
+        if now < expiry:
+            return json.loads(cached)
+
+    result = _json_request(prompt, schema, max_tokens, tier=tier)
+
+    if ttl > 0:
+        _cache[key] = (now + ttl, json.dumps(result))
+
+    return result
+
+
+def clear_cache():
+    _cache.clear()
+
+
+# Pattern matches common prompt-injection vectors like embedded instructions,
+# XML/HTML tag closings, template variable overrides, and delimiter escapes.
+_INJECTION_PATTERNS = re.compile(
+    r"(?is)"
+    r"(?:<\|?system\|?>|</?(?:system|assistant|user|prompt|instructions)>)"
+    r"|(?:ignore\s+(?:all\s+)?(?:above|previous|below|instructions))"
+    r"|(?:\{\{|\}\}|{#|#})",
+)
+
+
+def _sanitize(text: str) -> str:
+    """Strip or replace common prompt-injection patterns in user-provided text."""
+    text = _INJECTION_PATTERNS.sub("[sanitized]", text)
+    return text[:MAX_INPUT_CHARS]
 
 
 class AIServiceError(Exception):
@@ -25,19 +99,36 @@ def _string_array() -> dict:
     return {"type": "array", "items": {"type": "string"}}
 
 
-def _create_message(**kwargs):
-    try:
-        return _client.messages.create(model=settings.ai_model, **kwargs)
-    except (TypeError, anthropic.AuthenticationError):
-        # The SDK raises TypeError when no credentials are configured at all.
-        raise AIServiceError("Anthropic API key is missing or invalid. Set ANTHROPIC_API_KEY.")
-    except anthropic.APIError as exc:
-        raise AIServiceError(f"AI request failed: {exc}")
+def _create_message(*, model: str | None = None, **kwargs):
+    last_exc = None
+    resolved = model or settings.ai_model
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return _client.messages.create(model=resolved, **kwargs)
+        except (TypeError, anthropic.AuthenticationError):
+            # The SDK raises TypeError when no credentials are configured at all.
+            raise AIServiceError("Anthropic API key is missing or invalid. Set ANTHROPIC_API_KEY.")
+        except anthropic.RateLimitError as exc:
+            last_exc = exc
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+                continue
+        except anthropic.APIStatusError as exc:
+            # Retry on server errors (5xx), fail fast on client errors (4xx).
+            if exc.status_code >= 500 and attempt < _MAX_RETRIES - 1:
+                last_exc = exc
+                time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+                continue
+            raise AIServiceError(f"AI request failed: {exc}")
+        except anthropic.APIError as exc:
+            raise AIServiceError(f"AI request failed: {exc}")
+    raise AIServiceError(f"AI request failed after {_MAX_RETRIES} retries: {last_exc}")
 
 
-def _json_request(prompt: str, schema: dict, max_tokens: int = 4096) -> dict:
+def _json_request(prompt: str, schema: dict, max_tokens: int = 4096, tier: str = "quality") -> dict:
     response = _create_message(
         max_tokens=max_tokens,
+        model=get_model(tier),
         system=prompts.FAIRNESS_CHARTER,
         messages=[{"role": "user", "content": prompt}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
@@ -51,9 +142,10 @@ def _json_request(prompt: str, schema: dict, max_tokens: int = 4096) -> dict:
         raise AIServiceError("AI returned malformed output. Please retry.")
 
 
-def _text_request(prompt: str, max_tokens: int = 1500) -> str:
+def _text_request(prompt: str, max_tokens: int = 1500, tier: str = "quality") -> str:
     response = _create_message(
         max_tokens=max_tokens,
+        model=get_model(tier),
         system=prompts.FAIRNESS_CHARTER,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -85,9 +177,9 @@ JOB_SCHEMA = {
 }
 
 
-def extract_job(description: str) -> dict:
-    prompt = prompts.JOB_EXTRACTION_PROMPT.format(job_description=description[:MAX_INPUT_CHARS])
-    return _json_request(prompt, JOB_SCHEMA)
+def extract_job(description: str, tier: str = "quality") -> dict:
+    prompt = prompts.JOB_EXTRACTION_PROMPT.format(job_description=_sanitize(description))
+    return _cached_json_request(prompt, JOB_SCHEMA, tier=tier)
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +235,9 @@ CV_SCHEMA = {
 }
 
 
-def extract_cv(cv_text: str) -> dict:
-    prompt = prompts.CV_EXTRACTION_PROMPT.format(cv_text=cv_text[:MAX_INPUT_CHARS])
-    return _json_request(prompt, CV_SCHEMA, max_tokens=6000)
+def extract_cv(cv_text: str, tier: str = "quality") -> dict:
+    prompt = prompts.CV_EXTRACTION_PROMPT.format(cv_text=_sanitize(cv_text))
+    return _cached_json_request(prompt, CV_SCHEMA, max_tokens=6000, tier=tier)
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +303,12 @@ def _recommendation_for(total: float) -> str:
     return "Weak Match"
 
 
-def score_candidate(job_extracted: dict, parsed_cv: dict) -> dict:
+def score_candidate(job_extracted: dict, parsed_cv: dict, tier: str = "quality") -> dict:
     prompt = prompts.SCORING_PROMPT.format(
         job_json=json.dumps(job_extracted, indent=2),
         cv_json=json.dumps(parsed_cv, indent=2),
     )
-    result = _json_request(prompt, ANALYSIS_SCHEMA, max_tokens=6000)
+    result = _cached_json_request(prompt, ANALYSIS_SCHEMA, max_tokens=6000, tier=tier)
 
     # Enforce category caps and recompute the total/recommendation server-side
     # so the scoring weights are always honored regardless of model output.
@@ -256,7 +348,7 @@ QUESTIONS_SCHEMA = {
 }
 
 
-def generate_questions(job_extracted: dict, parsed_cv: dict, analysis: dict | None) -> dict:
+def generate_questions(job_extracted: dict, parsed_cv: dict, analysis: dict | None, tier: str = "quality") -> dict:
     analysis = analysis or {}
     prompt = prompts.QUESTIONS_PROMPT.format(
         job_json=json.dumps(job_extracted, indent=2),
@@ -264,7 +356,7 @@ def generate_questions(job_extracted: dict, parsed_cv: dict, analysis: dict | No
         missing_skills=", ".join(analysis.get("missing_skills", [])) or "none identified",
         strengths=", ".join(analysis.get("key_strengths", [])) or "none identified",
     )
-    return _json_request(prompt, QUESTIONS_SCHEMA, max_tokens=6000)
+    return _cached_json_request(prompt, QUESTIONS_SCHEMA, max_tokens=6000, tier=tier)
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +386,7 @@ def conduct_interview_turn(
     questions: dict | None,
     transcript: list[dict],
     force_wrap_up: bool = False,
+    tier: str = "quality",
 ) -> dict:
     """Return the interviewer's next turn: {"message": str, "is_complete": bool}."""
     context = prompts.INTERVIEW_CONTEXT_PROMPT.format(
@@ -305,12 +398,13 @@ def conduct_interview_turn(
     messages = [{"role": "user", "content": context}]
     for entry in transcript:
         role = "assistant" if entry.get("role") == "interviewer" else "user"
-        messages.append({"role": role, "content": entry.get("text", "")})
+        text = _sanitize(entry.get("text", "")) if role == "user" else entry.get("text", "")
+        messages.append({"role": role, "content": text})
     if force_wrap_up:
         messages.append({"role": "user", "content": prompts.WRAP_UP_INSTRUCTION})
 
     response = _create_message(
-        max_tokens=1024,
+        max_tokens=1024, model=get_model(tier),
         system=_INTERVIEWER_SYSTEM,
         messages=messages,
         output_config={"format": {"type": "json_schema", "schema": INTERVIEW_TURN_SCHEMA}},
@@ -357,14 +451,14 @@ def transcript_to_text(transcript: list[dict]) -> str:
     )
 
 
-def assess_interview(candidate_name: str, job_title: str, job_extracted: dict, transcript: list[dict]) -> dict:
+def assess_interview(candidate_name: str, job_title: str, job_extracted: dict, transcript: list[dict], tier: str = "quality") -> dict:
     prompt = prompts.INTERVIEW_ASSESSMENT_PROMPT.format(
         candidate_name=candidate_name,
         job_title=job_title,
         job_json=json.dumps(job_extracted, indent=2),
         transcript_text=transcript_to_text(transcript)[:MAX_INPUT_CHARS],
     )
-    result = _json_request(prompt, _build_assessment_schema(), max_tokens=4000)
+    result = _cached_json_request(prompt, _build_assessment_schema(), max_tokens=4000, tier=tier)
     result["human_review_reminder"] = prompts.HUMAN_REVIEW_REMINDER
     return result
 
@@ -390,7 +484,7 @@ def compute_interview_score(ratings: dict) -> float:
     return round(sum(values) / (len(values) * 5) * 100, 1)
 
 
-def summarize_interview(candidate_name: str, job_title: str, ratings: dict, notes: str, score: float) -> str:
+def summarize_interview(candidate_name: str, job_title: str, ratings: dict, notes: str, score: float, tier: str = "quality") -> str:
     ratings_text = "\n".join(
         f"- {cat.replace('_', ' ').title()}: {ratings.get(cat, 'n/a')}/5" for cat in EVALUATION_CATEGORIES
     )
@@ -401,7 +495,7 @@ def summarize_interview(candidate_name: str, job_title: str, ratings: dict, note
         score=score,
         notes=notes.strip() or "(no notes provided)",
     )
-    return _text_request(prompt)
+    return _text_request(prompt, tier=tier)
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +531,7 @@ def generate_final_report(
     ratings: dict,
     notes: str,
     interview_summary: str,
+    tier: str = "quality",
 ) -> dict:
     prompt = prompts.FINAL_REPORT_PROMPT.format(
         candidate_name=candidate_name,
@@ -449,6 +544,6 @@ def generate_final_report(
         notes=notes.strip() or "(no notes provided)",
         interview_summary=interview_summary or "(not available)",
     )
-    result = _json_request(prompt, REPORT_SCHEMA, max_tokens=4000)
+    result = _cached_json_request(prompt, REPORT_SCHEMA, max_tokens=4000, tier=tier)
     result["human_review_reminder"] = prompts.HUMAN_REVIEW_REMINDER
     return result
